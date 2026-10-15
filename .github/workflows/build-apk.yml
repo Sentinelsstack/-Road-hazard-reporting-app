@@ -1,0 +1,111 @@
+name: Build Android APK
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      app_url:
+        description: "Base URL of the hosted RoadHaz site (e.g. https://roadhaz.example.com)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve app URL
+        id: url
+        env:
+          INPUT_URL: ${{ inputs.app_url || vars.APP_URL }}
+        run: |
+          if [ -z "$INPUT_URL" ]; then
+            echo "::error::No app URL. Set the repo variable APP_URL (Settings > Secrets and variables > Variables), or pass app_url when running manually."
+            exit 1
+          fi
+          BASE="${INPUT_URL%/}"
+          HOST=$(echo "$BASE" | sed 's|^https\?://||')
+          echo "base=$BASE" >> "$GITHUB_OUTPUT"
+          echo "host=$HOST" >> "$GITHUB_OUTPUT"
+
+      - name: Check site is live
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' "${{ steps.url.outputs.base }}/manifest.json")
+          if [ "$code" != "200" ]; then
+            echo "::error::${{ steps.url.outputs.base }}/manifest.json returned HTTP $code. Bubblewrap needs the site live over HTTPS to build the APK."
+            exit 1
+          fi
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: yes | sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Bubblewrap
+        run: npm install -g @bubblewrap/cli
+
+      - name: Configure TWA manifest
+        run: |
+          sed -i \
+            -e "s|__APP_URL__|${{ steps.url.outputs.base }}|g" \
+            -e "s|__HOST__|${{ steps.url.outputs.host }}|g" \
+            twa-manifest.json
+          cat twa-manifest.json
+
+      - name: Prepare signing keystore
+        env:
+          KEYSTORE_B64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > android.keystore
+          else
+            echo "::warning::KEYSTORE_BASE64 secret not set — generating an ephemeral keystore. Later releases will NOT update in place over APKs signed with a different key."
+            keytool -genkeypair -keystore android.keystore -alias android \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass "${KEYSTORE_PASSWORD:-roadhaz}" -keypass "${KEYSTORE_PASSWORD:-roadhaz}" \
+              -dname "CN=RoadHaz, OU=CI, O=RoadHaz, C=US"
+          fi
+
+      - name: Build APK
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+        run: echo "${KEYSTORE_PASSWORD:-roadhaz}" | bubblewrap build --skipPwaValidation
+
+      - name: Collect APK
+        run: |
+          mkdir -p dist
+          apk=$(find . -name '*.apk' -not -path './node_modules/*' | head -n 1)
+          if [ -z "$apk" ]; then
+            echo "::error::No APK produced by bubblewrap build."
+            exit 1
+          fi
+          cp "$apk" dist/RoadHaz.apk
+          echo "Built: $apk"
+
+      - name: Attach APK to the release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/RoadHaz.apk
+
+      - name: Upload APK as workflow artifact
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: RoadHaz-apk
+          path: dist/RoadHaz.apk

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="80" fill="#2563eb"/>
+  <path d="M256 80l-144 64v112c0 116 64 192 144 216 80-24 144-100 144-216V144l-144-64z" fill="#1d4ed8"/>
+  <path d="M256 104l-128 56v104c0 104 56 172 128 192 72-20 128-88 128-192V160l-128-56z" fill="#2563eb"/>
+  <text x="256" y="304" font-family="Arial,sans-serif" font-size="144" font-weight="bold" fill="#fff" text-anchor="middle">RH</text>
+</svg>
